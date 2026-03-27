@@ -135,18 +135,20 @@ function detectTier() {
 }
 
 const tier = detectTier();
-// PRD spec: High 2M, Mid 1M, Low 500K → sqrt(2M)≈1414, sqrt(1M)=1024, sqrt(500K)≈724
+// PRD spec: High 2,000,000 / Mid 1,000,000 / Low 500,000 particles exactly (PRD.md:9).
+// GPGPU requires square textures → allocate ceil(sqrt(2M)) = 1415, then drawRange to exact.
 // All three tiers render live. Only no-WebGL/GPGPU-fail → video fallback.
-// Runtime FPS monitor steps down: high → mid → low → video (PRD.md:9)
-const TEX_SIZES = { high: 1414, mid: 1024, low: 724, fallback: 0 };
-const TEX = TEX_SIZES[tier] || 724;
-const COUNT = TEX * TEX;
+// Runtime FPS monitor steps down: high → mid → low → video.
+const EXACT_COUNTS = { high: 2000000, mid: 1000000, low: 500000 };
+const TEX = 1415; // ceil(sqrt(2M)): covers all tiers with a single GPGPU allocation
+const COUNT = TEX * TEX; // total GPGPU texels (~2.002M, slightly over for square alignment)
+const EXACT_COUNT = EXACT_COUNTS[tier] || EXACT_COUNTS.mid; // exact particle budget for this tier
 const CYCLE = 20.0;
 
 document.getElementById('ui-tier').textContent = tier.toUpperCase();
-document.getElementById('ui-particles').textContent = COUNT >= 1e6
-  ? (COUNT / 1e6).toFixed(1) + 'M'
-  : (COUNT / 1e3 | 0) + 'K';
+document.getElementById('ui-particles').textContent = EXACT_COUNT >= 1e6
+  ? (EXACT_COUNT / 1e6).toFixed(1) + 'M'
+  : (EXACT_COUNT / 1e3 | 0) + 'K';
 
 // Low-end fallback: attempt video loop first, fall through to gradient if video fails
 function activateVideoFallback(reason) {
@@ -255,8 +257,11 @@ const velShader = /* glsl */`
 ${NOISE}
 uniform float uTime;
 uniform float uBreath;
+uniform float uActiveTex; // active texture size for runtime tier scaling
 void main(){
   vec2 uv=gl_FragCoord.xy/resolution.xy;
+  // Skip compute for texels beyond active particle budget (runtime tier downgrade)
+  if(gl_FragCoord.x>=uActiveTex||gl_FragCoord.y>=uActiveTex){gl_FragColor=vec4(0.);return;}
   vec4 p4=texture2D(texturePosition,uv);
   vec4 v4=texture2D(textureVelocity,uv);
   vec3 p=p4.xyz, v=v4.xyz;
@@ -305,8 +310,11 @@ void main(){
 // ═══════════════════════════════════════════════════════════════
 const posShader = /* glsl */`
 uniform float uBreath;
+uniform float uActiveTex; // active texture size for runtime tier scaling
 void main(){
   vec2 uv=gl_FragCoord.xy/resolution.xy;
+  // Skip compute for texels beyond active particle budget
+  if(gl_FragCoord.x>=uActiveTex||gl_FragCoord.y>=uActiveTex){gl_FragColor=vec4(0.);return;}
   vec4 p4=texture2D(texturePosition,uv);
   vec4 v4=texture2D(textureVelocity,uv);
   vec3 p=p4.xyz+v4.xyz*0.008;
@@ -452,8 +460,10 @@ gpu.setVariableDependencies(posV, [posV, velV]);
 gpu.setVariableDependencies(velV, [posV, velV]);
 const pu = posV.material.uniforms, vu = velV.material.uniforms;
 pu.uBreath = { value: 0 };
+pu.uActiveTex = { value: TEX }; // full texture size initially
 vu.uTime = { value: 0 };
 vu.uBreath = { value: 0 };
+vu.uActiveTex = { value: TEX };
 
 const gpuErr = gpu.init();
 if (gpuErr) {
@@ -474,6 +484,8 @@ for (let i = 0; i < COUNT; i++) {
 }
 geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 geo.setAttribute('position', new THREE.BufferAttribute(pos0, 3));
+// Set initial draw range to exact PRD particle count for this tier
+geo.setDrawRange(0, EXACT_COUNT);
 
 const mat = new THREE.ShaderMaterial({
   uniforms: { tPos: {value:null}, tVel: {value:null}, uSize: {value:1.0}, uBreath: {value:0}, uResolution: {value: new THREE.Vector2(window.innerWidth, window.innerHeight)} },
@@ -699,40 +711,43 @@ let lowFpsCount = 0;
 const FPS_THRESHOLD = 24; // If sustained below this, step down one tier
 const LOW_FPS_SUSTAIN = 4; // seconds of sustained low FPS before stepping down
 
-// Live particle budget — can be reduced at runtime without reinitializing GPGPU.
-// We limit the draw range of the Points mesh. GPGPU still runs full texture,
-// but only the first N particles are rendered (cheap LOD).
-const TIER_COUNTS = { high: 1414*1414, mid: 1024*1024, low: 724*724 };
+// Live particle budget — reduced at runtime by clamping BOTH draw range AND GPGPU
+// active texel area (via uActiveTex uniform). This achieves true full-pipeline scaling:
+// the GPU compute shaders early-return for texels outside the active budget.
+const TIER_COUNTS = { high: 2000000, mid: 1000000, low: 500000 };
+const TIER_TEX = { high: 1414, mid: 1024, low: 724 };
 const TIER_ORDER = ['high', 'mid', 'low', 'video'];
-let currentLiveTier = tier; // starts at detected tier
-let liveParticleCount = COUNT; // actual rendered particles
+let currentLiveTier = tier;
+let liveParticleCount = EXACT_COUNT;
 
 function stepDownTier() {
   const idx = TIER_ORDER.indexOf(currentLiveTier);
   if (idx < 0 || idx >= TIER_ORDER.length - 1) {
-    // Already at video or unknown — activate video fallback
     activateVideoFallback('Performance too low.<br>Showing pre-rendered visualization.');
-    return false; // signal to stop render loop
+    return false;
   }
   const nextTier = TIER_ORDER[idx + 1];
   if (nextTier === 'video') {
     activateVideoFallback('Performance too low.<br>Showing pre-rendered visualization.');
     return false;
   }
-  // Step down to next live tier
   currentLiveTier = nextTier;
   liveParticleCount = TIER_COUNTS[nextTier];
-  // Clamp draw range — only render first N particles
+  const newTexSize = TIER_TEX[nextTier];
+  // Clamp draw range — fewer particles rendered
   geo.setDrawRange(0, liveParticleCount);
+  // Scale GPGPU compute budget — shader early-returns for out-of-budget texels
+  vu.uActiveTex.value = newTexSize;
+  pu.uActiveTex.value = newTexSize;
   // Update HUD
   document.getElementById('ui-tier').textContent = nextTier.toUpperCase() + ' (↓)';
   document.getElementById('ui-particles').textContent = liveParticleCount >= 1e6
     ? (liveParticleCount / 1e6).toFixed(1) + 'M'
     : (liveParticleCount / 1e3 | 0) + 'K';
-  console.warn('Runtime tier downgrade: ' + TIER_ORDER[idx] + ' → ' + nextTier +
-    ' (' + liveParticleCount + ' particles)');
-  lowFpsCount = 0; // reset counter for next tier
-  return true; // continue render loop
+  console.warn('Runtime full-pipeline downgrade: ' + TIER_ORDER[idx] + ' → ' + nextTier +
+    ' (tex ' + newTexSize + ', ' + liveParticleCount + ' particles)');
+  lowFpsCount = 0;
+  return true;
 }
 
 // ═══════════════════════════════════════════════════════════════
