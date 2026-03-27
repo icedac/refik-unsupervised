@@ -40,7 +40,7 @@ canvas{display:block;position:fixed;top:0;left:0;width:100%;height:100%;z-index:
 
 /* Callout SVG */
 #callout-svg{position:fixed;top:0;left:0;width:100%;height:100%;z-index:5;pointer-events:none}
-.cl-line{stroke:rgba(240,240,240,.15);stroke-width:.5;fill:none;stroke-dasharray:4 3}
+.cl-line{stroke:rgba(240,240,240,.2);stroke-width:1;fill:none;stroke-dasharray:4 3}
 .cl-dot{fill:rgba(240,240,240,.6)}
 
 /* Callout labels */
@@ -132,8 +132,9 @@ function detectTier() {
 }
 
 const tier = detectTier();
-const TEX_SIZES = { high: 1024, mid: 768, low: 512, fallback: 0 };
-const TEX = TEX_SIZES[tier] || 512;
+// PRD spec: High 2M, Mid 1M, Low 500K → sqrt(2M)≈1414, sqrt(1M)=1024, sqrt(500K)≈724
+const TEX_SIZES = { high: 1414, mid: 1024, low: 724, fallback: 0 };
+const TEX = TEX_SIZES[tier] || 724;
 const COUNT = TEX * TEX;
 const CYCLE = 20.0;
 
@@ -293,13 +294,20 @@ uniform float uSize;
 uniform float uBreath;
 varying vec3 vCol;
 varying float vA;
+varying float vStretch;
 void main(){
   vec4 pd=texture2D(tPos,uv);
   vec4 vd=texture2D(tVel,uv);
   vec3 pos=pd.xyz;
-  float spd=length(vd.xyz);
+  vec3 vel=vd.xyz;
+  float spd=length(vel);
   float dist=length(pos);
   float phase=pd.w;
+
+  // === VELOCITY STRETCHING for tendril appearance ===
+  // Stretch particle along velocity direction in screen space
+  float stretchFactor=1.0+spd*2.5; // faster = more elongated
+  vStretch=clamp(stretchFactor,1.0,4.0);
 
   // === COLOR PALETTE: Neon Magenta, Cyan, Emerald ===
   float t=clamp(spd*3.0,0.,1.);
@@ -316,24 +324,25 @@ void main(){
   else col=mix(emerald,magenta,t);
 
   // Deep purple for slow distant particles
-  float slowFar=smoothstep(0.0,0.2,spd)*smoothstep(3.0,1.5,dist);
+  float slowFar=smoothstep(0.0,0.15,spd)*smoothstep(3.0,1.5,dist);
   col=mix(deepPurple,col,slowFar);
 
-  // WHITE BLOWN-OUT CORE — particles near center become pure white
-  float coreFactor=1.0-smoothstep(0.0,0.8,dist);
-  coreFactor=pow(coreFactor,1.5); // stronger falloff
-  col=mix(col,vec3(1.0),coreFactor*0.92);
+  // WHITE BLOWN-OUT CORE — strong blowout near center
+  float coreFactor=1.0-smoothstep(0.0,0.6,dist);
+  coreFactor=pow(coreFactor,2.0);
+  col=mix(col,vec3(1.0),coreFactor*0.95);
 
-  // Brightness boost for dense regions (speed indicates convergence)
-  col*=1.0+spd*0.5;
+  // Brightness boost
+  col*=1.0+spd*0.6;
 
   vCol=col;
   // Alpha: near=bright, far=dim, speed boosts visibility
-  vA=(.15+.85*(1.-smoothstep(0.,2.5,dist)))*(0.3+spd*0.7);
-  vA*=(0.8+0.2*uBreath); // breathe alpha
+  vA=(.12+.88*(1.-smoothstep(0.,2.5,dist)))*(0.25+spd*0.8);
+  vA*=(0.8+0.2*uBreath);
 
   vec4 mv=modelViewMatrix*vec4(pos,1.);
-  gl_PointSize=uSize*(1.+spd*.5)*(250./-mv.z);
+  // Larger point size for stretched particles
+  gl_PointSize=uSize*vStretch*(220./-mv.z);
   gl_Position=projectionMatrix*mv;
 }`;
 
@@ -343,11 +352,15 @@ void main(){
 const ptFrag = /* glsl */`
 varying vec3 vCol;
 varying float vA;
+varying float vStretch;
 void main(){
-  float d=length(gl_PointCoord-.5)*2.;
-  // Soft Gaussian-ish falloff
-  float a=exp(-d*d*3.0);
-  a*=vA*0.28;
+  vec2 pc=gl_PointCoord-0.5;
+  // Stretch the point sprite along X for velocity-elongated filaments
+  pc.x*=vStretch;
+  float d=length(pc)*2.0;
+  // Soft Gaussian-ish falloff, tighter for filament look
+  float a=exp(-d*d*4.0);
+  a*=vA*0.25;
   gl_FragColor=vec4(vCol*a,a);
 }`;
 
@@ -417,12 +430,44 @@ scene.add(pts);
 // ═══════════════════════════════════════════════════════════════
 // BACKGROUND: Lat/Lon Spherical Grid (dotted lines)
 // ═══════════════════════════════════════════════════════════════
+// Custom ShaderMaterial for grid lines with built-in radial fade
+const gridLineMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uColor: { value: new THREE.Color(0x556070) },
+    uCameraPos: { value: camera.position }
+  },
+  vertexShader: `
+    varying float vFade;
+    varying float vDist;
+    uniform vec3 uCameraPos;
+    void main(){
+      vec4 worldPos=modelMatrix*vec4(position,1.0);
+      vec4 mvp=projectionMatrix*modelViewMatrix*vec4(position,1.0);
+      // Screen-space edge fade (radial from center)
+      vec2 ndc=mvp.xy/mvp.w;
+      float edgeDist=length(ndc);
+      vFade=1.0-smoothstep(0.3,1.1,edgeDist);
+      // Distance-based fade (farther from camera = dimmer)
+      vDist=length(worldPos.xyz-uCameraPos);
+      gl_Position=mvp;
+    }
+  `,
+  fragmentShader: `
+    varying float vFade;
+    varying float vDist;
+    uniform vec3 uColor;
+    void main(){
+      float distFade=1.0-smoothstep(4.0,12.0,vDist);
+      float alpha=vFade*distFade*0.1;
+      if(alpha<0.003) discard;
+      gl_FragColor=vec4(uColor,alpha);
+    }
+  `,
+  transparent: true, depthWrite: false, side: THREE.DoubleSide
+});
+
 function createLatLonGrid(radius, latCount, lonCount) {
   const group = new THREE.Group();
-  const lineMat = new THREE.LineDashedMaterial({
-    color: 0x556070, transparent: true, opacity: 0.08,
-    dashSize: 0.15, gapSize: 0.12, depthWrite: false
-  });
 
   // Latitude circles
   for (let i = 1; i < latCount; i++) {
@@ -430,13 +475,12 @@ function createLatLonGrid(radius, latCount, lonCount) {
     const r = radius * Math.sin(phi);
     const y = radius * Math.cos(phi);
     const pts = [];
-    for (let j = 0; j <= 64; j++) {
-      const theta = (j / 64) * Math.PI * 2;
+    for (let j = 0; j <= 96; j++) { // higher subdivision
+      const theta = (j / 96) * Math.PI * 2;
       pts.push(new THREE.Vector3(r * Math.cos(theta), y, r * Math.sin(theta)));
     }
     const g = new THREE.BufferGeometry().setFromPoints(pts);
-    const line = new THREE.Line(g, lineMat.clone());
-    line.computeLineDistances();
+    const line = new THREE.LineSegments(g, gridLineMat.clone());
     group.add(line);
   }
 
@@ -444,8 +488,8 @@ function createLatLonGrid(radius, latCount, lonCount) {
   for (let j = 0; j < lonCount; j++) {
     const theta = (j / lonCount) * Math.PI * 2;
     const pts = [];
-    for (let i = 0; i <= 48; i++) {
-      const phi = (i / 48) * Math.PI;
+    for (let i = 0; i <= 64; i++) { // higher subdivision
+      const phi = (i / 64) * Math.PI;
       pts.push(new THREE.Vector3(
         radius * Math.sin(phi) * Math.cos(theta),
         radius * Math.cos(phi),
@@ -453,20 +497,16 @@ function createLatLonGrid(radius, latCount, lonCount) {
       ));
     }
     const g = new THREE.BufferGeometry().setFromPoints(pts);
-    const line = new THREE.Line(g, lineMat.clone());
-    line.computeLineDistances();
+    const line = new THREE.LineSegments(g, gridLineMat.clone());
     group.add(line);
   }
 
   return group;
 }
 
-const gridGroup = createLatLonGrid(7, 16, 24);
+// Denser grid: 24 lat × 36 lon for immersive data universe feel
+const gridGroup = createLatLonGrid(7, 24, 36);
 scene.add(gridGroup);
-
-// Radial fade: apply via custom screen-space pass or per-line alpha
-// We'll use a vignette-like radial mask on the grid lines
-// (simulated by a screen-space overlay that fades grid at edges)
 
 // ═══════════════════════════════════════════════════════════════
 // POST PROCESSING: Bloom (strong for white core effect)
@@ -475,20 +515,14 @@ const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
-  2.2,    // strength — strong for blown-out core
-  0.8,    // radius
-  0.02    // threshold — low to catch more particles
+  2.5,    // strength — aggressive for blown-out white core
+  1.0,    // radius — wider bloom spread
+  0.15    // threshold — higher so only bright core particles bloom heavily
 );
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 
-// ═══════════════════════════════════════════════════════════════
-// RADIAL GRADIENT MASK (viewport edge fade for grid)
-// ═══════════════════════════════════════════════════════════════
-// Create a fullscreen overlay that darkens the edges
-const radialOverlay = document.createElement('div');
-radialOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:2;pointer-events:none;background:radial-gradient(ellipse at center,transparent 30%,rgba(0,0,0,0.4) 65%,rgba(0,0,0,0.85) 100%)';
-document.body.appendChild(radialOverlay);
+// Radial fade is now built into grid shader (per-vertex alpha based on screen position)
 
 // ═══════════════════════════════════════════════════════════════
 // CALLOUT ANCHOR SYSTEM — Raycasting to sculpture surface
@@ -614,6 +648,12 @@ function tick() {
   // Grid slow rotation
   gridGroup.rotation.y = t * 0.015;
   gridGroup.rotation.x = Math.sin(t * 0.008) * 0.08;
+  // Update grid shader camera position for correct fade
+  gridGroup.traverse(child => {
+    if (child.material && child.material.uniforms && child.material.uniforms.uCameraPos) {
+      child.material.uniforms.uCameraPos.value.copy(camera.position);
+    }
+  });
 
   // Proxy sphere breathes with sculpture
   const proxyScale = 1.2 + 0.4 * breath;
