@@ -137,6 +137,7 @@ function detectTier() {
 
 const tier = detectTier();
 // PRD spec: High 2M, Mid 1M, Low 500K → sqrt(2M)≈1414, sqrt(1M)=1024, sqrt(500K)≈724
+// Low-end devices get video-loop fallback per PRD.md:9
 const TEX_SIZES = { high: 1414, mid: 1024, low: 724, fallback: 0 };
 const TEX = TEX_SIZES[tier] || 724;
 const COUNT = TEX * TEX;
@@ -147,26 +148,32 @@ document.getElementById('ui-particles').textContent = COUNT >= 1e6
   ? (COUNT / 1e6).toFixed(1) + 'M'
   : (COUNT / 1e3 | 0) + 'K';
 
-// Fallback for non-WebGL devices: show video loop or static gradient
-if (tier === 'fallback') {
+// Low-end fallback: attempt video loop first, fall through to gradient if video fails
+function activateVideoFallback(reason) {
   const vid = document.getElementById('fallback-video');
-  // Try video fallback first
   vid.src = 'https://cdn.feralfile.com/unsupervised-loop.mp4';
-  vid.muted = true;
-  vid.loop = true;
-  vid.playsInline = true;
+  vid.muted = true; vid.loop = true; vid.playsInline = true;
   vid.style.display = 'block';
   vid.play().catch(() => {
-    // If video fails too, show gradient + message
     vid.style.display = 'none';
     document.getElementById('loader').innerHTML =
       '<div style="text-align:center"><div style="font-size:22px;letter-spacing:.2em;margin-bottom:16px">UNSUPERVISED</div>' +
-      '<div style="opacity:.5;font-size:10px">WebGL 2.0 required for real-time rendering.<br>Please use a modern desktop browser.</div></div>';
+      '<div style="opacity:.5;font-size:10px">' + reason + '</div></div>';
     document.getElementById('loader').style.background =
       'radial-gradient(ellipse at center, #1a0a2e 0%, #000 70%)';
   });
   document.getElementById('loader').classList.add('hidden');
+}
+
+// For no-WebGL devices: video fallback
+if (tier === 'fallback') {
+  activateVideoFallback('WebGL 2.0 required for real-time rendering.<br>Please use a modern desktop browser.');
   throw new Error('No WebGL — video fallback shown');
+}
+// PRD §2: low-end devices use video-loop fallback instead of rendering 500K particles
+if (tier === 'low') {
+  activateVideoFallback('Low-end GPU detected.<br>Showing pre-rendered visualization.');
+  throw new Error('Low tier — video fallback shown');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -441,20 +448,7 @@ vu.uBreath = { value: 0 };
 const gpuErr = gpu.init();
 if (gpuErr) {
   console.error('GPGPU:', gpuErr);
-  // GPGPU failure → try video fallback same as no-WebGL path
-  const vid = document.getElementById('fallback-video');
-  vid.src = 'https://cdn.feralfile.com/unsupervised-loop.mp4';
-  vid.muted = true; vid.loop = true; vid.playsInline = true;
-  vid.style.display = 'block';
-  vid.play().catch(() => {
-    vid.style.display = 'none';
-    document.getElementById('loader').innerHTML =
-      '<div style="text-align:center"><div style="font-size:22px;letter-spacing:.2em;margin-bottom:16px">UNSUPERVISED</div>' +
-      '<div style="opacity:.5;font-size:10px">GPGPU init failed. Please use a modern GPU.</div></div>';
-    document.getElementById('loader').style.background =
-      'radial-gradient(ellipse at center, #1a0a2e 0%, #000 70%)';
-  });
-  document.getElementById('loader').classList.add('hidden');
+  activateVideoFallback('GPGPU init failed. Please use a modern GPU.');
   throw new Error('GPGPU failed — video fallback: ' + gpuErr);
 }
 
@@ -618,46 +612,36 @@ composer.addPass(new OutputPass());
 // Radial fade is built into grid dash fragment shader (screen-space NDC distance)
 
 // ═══════════════════════════════════════════════════════════════
-// CALLOUT ANCHOR SYSTEM — Raycasting to sculpture surface
+// CALLOUT ANCHOR SYSTEM — Real GPGPU texture readback
 // ═══════════════════════════════════════════════════════════════
-// Create an invisible proxy sphere for raycasting
-const proxyGeo = new THREE.SphereGeometry(1.5, 32, 32);
-const proxyMat = new THREE.MeshBasicMaterial({ visible: false });
-const proxySphere = new THREE.Mesh(proxyGeo, proxyMat);
-scene.add(proxySphere);
-
-const raycaster = new THREE.Raycaster();
-// Anchor directions (normalized) — where callout lines point on the sculpture surface
-const anchorDirs = {
-  medium:  new THREE.Vector3(-0.6, 0.5, 0.3).normalize(),
-  res:     new THREE.Vector3(0.7, 0.4, -0.2).normalize(),
-  latent:  new THREE.Vector3(-0.4, -0.5, 0.4).normalize(),
-  density: new THREE.Vector3(0.5, -0.4, 0.2).normalize(),
+// Sample actual particle positions from the GPGPU position texture.
+// We pick "sentinel" texels at fixed UV locations and read their world-space
+// positions via readRenderTargetPixels. This gives real sculpture-surface
+// anchor points that move with the live simulation — not a proxy sphere.
+const sentinelUVs = {
+  medium:  { u: 0.15, v: 0.25 },  // upper-left quadrant particle
+  res:     { u: 0.85, v: 0.20 },  // upper-right quadrant
+  latent:  { u: 0.20, v: 0.75 },  // lower-left quadrant
+  density: { u: 0.80, v: 0.70 },  // lower-right quadrant
 };
 const anchorTargets = {};
-for (const k in anchorDirs) {
-  anchorTargets[k] = anchorDirs[k].clone().multiplyScalar(1.5);
+for (const k in sentinelUVs) {
+  anchorTargets[k] = new THREE.Vector3(0, 0, 0);
 }
 
-function updateAnchorsViaRaycast(time) {
-  for (const [k, dir] of Object.entries(anchorDirs)) {
-    // Slowly orbit the anchor direction for liveliness
-    const angle = time * 0.06 + (k === 'medium' ? 0 : k === 'res' ? 1.57 : k === 'latent' ? 3.14 : 4.71);
-    const wobble = new THREE.Vector3(
-      dir.x + Math.sin(angle) * 0.12,
-      dir.y + Math.cos(angle * 0.7) * 0.1,
-      dir.z + Math.sin(angle * 1.3) * 0.08
-    ).normalize();
+// Readback buffer — we read 1 pixel per sentinel (4 floats = RGBA = xyz + phase)
+const readBuf = new Float32Array(4);
 
-    // Raycast from outside toward center
-    const origin = wobble.clone().multiplyScalar(10);
-    const direction = wobble.clone().negate();
-    raycaster.set(origin, direction);
-    const hits = raycaster.intersectObject(proxySphere);
-    if (hits.length > 0) {
-      anchorTargets[k].copy(hits[0].point);
-    } else {
-      anchorTargets[k].copy(wobble.clone().multiplyScalar(1.5));
+function updateAnchorsFromGPGPU() {
+  const rt = gpu.getCurrentRenderTarget(posV);
+  for (const [k, uv] of Object.entries(sentinelUVs)) {
+    const px = Math.floor(uv.u * TEX);
+    const py = Math.floor(uv.v * TEX);
+    renderer.readRenderTargetPixels(rt, px, py, 1, 1, readBuf);
+    // readBuf = [x, y, z, phase] — actual particle world position
+    if (isFinite(readBuf[0]) && isFinite(readBuf[1]) && isFinite(readBuf[2])) {
+      // Smooth interpolation for stable, non-jittery callout lines
+      anchorTargets[k].lerp(new THREE.Vector3(readBuf[0], readBuf[1], readBuf[2]), 0.12);
     }
   }
 }
@@ -698,9 +682,12 @@ window.addEventListener('resize', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// FPS
+// FPS + RUNTIME TIER DOWNGRADE
 // ═══════════════════════════════════════════════════════════════
 let fc = 0, lt = performance.now();
+let lowFpsCount = 0;
+const FPS_THRESHOLD = 20; // If FPS stays below 20 for 5 consecutive seconds, show fallback
+const LOW_FPS_LIMIT = 5;
 
 // ═══════════════════════════════════════════════════════════════
 // ANIMATION LOOP
@@ -749,23 +736,31 @@ function tick() {
     }
   });
 
-  // Proxy sphere breathes with sculpture
-  const proxyScale = 1.2 + 0.4 * breath;
-  proxySphere.scale.setScalar(proxyScale);
-
-  // Update anchors & callout lines
-  updateAnchorsViaRaycast(t);
+  // Update anchors from real GPGPU particle positions (every 3 frames for perf)
+  if (fc % 3 === 0) updateAnchorsFromGPGPU();
 
   // Render
   composer.render();
   updateCalloutLines();
 
-  // FPS display
+  // FPS display + runtime performance-based downgrade
   fc++;
   const now = performance.now();
   if (now - lt >= 1000) {
-    document.getElementById('ui-fps').textContent = fc;
-    document.getElementById('ui-density').textContent = (COUNT * fc / 1e6).toFixed(1) + 'M/s';
+    const fps = fc;
+    document.getElementById('ui-fps').textContent = fps;
+    document.getElementById('ui-density').textContent = (COUNT * fps / 1e6).toFixed(1) + 'M/s';
+    // Runtime tier downgrade: if FPS < threshold for sustained period, switch to video
+    if (fps < FPS_THRESHOLD && started) {
+      lowFpsCount++;
+      if (lowFpsCount >= LOW_FPS_LIMIT) {
+        console.warn('Sustained low FPS (' + fps + '), switching to video fallback');
+        activateVideoFallback('Performance too low (' + fps + ' FPS).<br>Showing pre-rendered visualization.');
+        return; // stop animation loop
+      }
+    } else {
+      lowFpsCount = 0;
+    }
     fc = 0; lt = now;
   }
 }
