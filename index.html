@@ -96,11 +96,11 @@ canvas{display:block;position:fixed;top:0;left:0;width:100%;height:100%;z-index:
     <div class="data-row"><span class="hud-label">TIER </span><span class="hud-value" id="ui-tier">—</span></div>
   </div>
 
-  <!-- Callout labels -->
+  <!-- Callout labels — matching original UNSUPERVISED reference -->
   <div class="cl-label" id="lb-medium" style="top:28%;left:48px"><span class="hud-label">MEDIUM</span><span class="hud-value">AI DATA SCULPTURE</span></div>
-  <div class="cl-label" id="lb-res" style="top:22%;right:48px;text-align:right"><span class="hud-label">RESOLUTION</span><span class="hud-value" id="ui-res">—</span></div>
-  <div class="cl-label" id="lb-latent" style="bottom:32%;left:48px"><span class="hud-label">LATENT SPACE</span><span class="hud-value">DIMENSION 512</span></div>
-  <div class="cl-label" id="lb-density" style="bottom:24%;right:48px;text-align:right"><span class="hud-label">FIELD DENSITY</span><span class="hud-value" id="ui-density">—</span></div>
+  <div class="cl-label" id="lb-res" style="top:22%;right:48px;text-align:right"><span class="hud-label">FERAL.FILE</span><span class="hud-value">1/1000 × AI</span></div>
+  <div class="cl-label" id="lb-latent" style="bottom:32%;left:48px"><span class="hud-label">RESOLUTION</span><span class="hud-value" id="ui-res">—</span></div>
+  <div class="cl-label" id="lb-density" style="bottom:24%;right:48px;text-align:right"><span class="hud-label">CYCLE</span><span class="hud-value">20 SECONDS LOOP</span></div>
 
   <a id="cta-btn" href="https://feralfile.com/artworks/unsupervised-machine-hallucinations-moma" target="_blank" rel="noopener">VIEW ON FERALFILE</a>
 </div>
@@ -348,19 +348,21 @@ void main(){
   vVelScreen=velLen>0.001?normalize(velDir):vec2(1.0,0.0);
   vStretch=clamp(1.0+spd*3.0,1.0,5.0);
 
-  // === COLOR PALETTE: Neon Magenta, Cyan, Emerald ===
+  // === COLOR PALETTE: Neon Magenta, Cyan, Emerald, Gold (per reference) ===
   float t=clamp(spd*3.0,0.,1.);
   vec3 magenta=vec3(.9,.05,.65);
   vec3 cyan=vec3(.05,.82,.92);
   vec3 emerald=vec3(.08,.92,.42);
+  vec3 gold=vec3(.95,.65,.08);
   vec3 deepPurple=vec3(.35,.02,.55);
 
-  // Phase-based color variation for strand diversity
-  float colorPhase=fract(phase*3.0+spd*2.0);
+  // Phase-based color variation for strand diversity (4 bands)
+  float colorPhase=fract(phase*4.0+spd*2.0);
   vec3 col;
-  if(colorPhase<0.33) col=mix(magenta,cyan,t);
-  else if(colorPhase<0.66) col=mix(cyan,emerald,t);
-  else col=mix(emerald,magenta,t);
+  if(colorPhase<0.25) col=mix(magenta,cyan,t);
+  else if(colorPhase<0.50) col=mix(cyan,emerald,t);
+  else if(colorPhase<0.75) col=mix(emerald,gold,t);
+  else col=mix(gold,magenta,t);
 
   // Deep purple for slow distant particles
   float slowFar=smoothstep(0.0,0.15,spd)*smoothstep(3.0,1.5,dist);
