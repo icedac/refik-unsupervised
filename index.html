@@ -140,9 +140,11 @@ const tier = detectTier();
 // All three tiers render live. Only no-WebGL/GPGPU-fail → video fallback.
 // Runtime FPS monitor steps down: high → mid → low → video.
 const EXACT_COUNTS = { high: 2000000, mid: 1000000, low: 500000 };
-const TEX = 1415; // ceil(sqrt(2M)): covers all tiers with a single GPGPU allocation
+const TIER_TEX_INIT = { high: 1415, mid: 1024, low: 724 }; // initial GPGPU active texel area per tier
+const TEX = 1415; // ceil(sqrt(2M)): covers all tiers with a single GPGPU texture allocation
 const COUNT = TEX * TEX; // total GPGPU texels (~2.002M, slightly over for square alignment)
 const EXACT_COUNT = EXACT_COUNTS[tier] || EXACT_COUNTS.mid; // exact particle budget for this tier
+const INIT_ACTIVE_TEX = TIER_TEX_INIT[tier] || TEX; // initial active texel area matches detected tier
 const CYCLE = 20.0;
 
 document.getElementById('ui-tier').textContent = tier.toUpperCase();
@@ -400,10 +402,8 @@ void main(){
     }
   }
   densityAccum /= 8.0; // normalize: 0 = isolated, 1 = all 8 neighbors within radius
-  // Combine local density with center proximity for robust core detection
-  float radiusCore = 1.0-smoothstep(0.0,0.5,dist);
-  float coreFactor = max(pow(densityAccum,1.2)*1.3, pow(radiusCore,3.0)*0.5);
-  coreFactor = clamp(coreFactor,0.0,1.0);
+  // Purely density-driven white core — no radius heuristic (PRD.md:17)
+  float coreFactor = clamp(pow(densityAccum, 1.1) * 1.4, 0.0, 1.0);
   col=mix(col,vec3(1.0),coreFactor*0.95);
   col*=1.0+spd*0.6;
 
@@ -473,10 +473,10 @@ gpu.setVariableDependencies(posV, [posV, velV]);
 gpu.setVariableDependencies(velV, [posV, velV]);
 const pu = posV.material.uniforms, vu = velV.material.uniforms;
 pu.uBreath = { value: 0 };
-pu.uActiveTex = { value: TEX }; // full texture size initially
+pu.uActiveTex = { value: INIT_ACTIVE_TEX }; // matches detected tier, not full texture
 vu.uTime = { value: 0 };
 vu.uBreath = { value: 0 };
-vu.uActiveTex = { value: TEX };
+vu.uActiveTex = { value: INIT_ACTIVE_TEX }; // GPGPU compute limited to tier budget from start
 
 const gpuErr = gpu.init();
 if (gpuErr) {
