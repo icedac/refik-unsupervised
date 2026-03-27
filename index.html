@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UNSUPERVISED — Refik Anadol</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Space Mono',monospace;cursor:crosshair}
+canvas{display:block;position:fixed;top:0;left:0;width:100%;height:100%;z-index:1}
+
+/* === HUD Overlay === */
+#hud{position:fixed;top:0;left:0;width:100%;height:100%;z-index:10;pointer-events:none;color:#F0F0F0;font-size:11px;letter-spacing:.05em}
+#hud *{pointer-events:none}
+.hud-label{opacity:.55;font-weight:400;font-size:9px;text-transform:uppercase;letter-spacing:.12em}
+.hud-value{opacity:.9;font-weight:400;font-size:11px}
+
+/* Top Left - Vertical */
+#top-left{position:absolute;top:48px;left:40px;writing-mode:vertical-rl;text-orientation:mixed;font-size:9px;letter-spacing:.18em;opacity:.45;line-height:1.4}
+
+/* Top Right */
+#top-right{position:absolute;top:48px;right:40px;text-align:right}
+#top-right .title{font-size:22px;font-weight:700;letter-spacing:.22em;margin-bottom:6px;opacity:.95}
+#top-right .subtitle{font-size:10px;opacity:.5;letter-spacing:.12em}
+
+/* Bottom Left */
+#bottom-left{position:absolute;bottom:44px;left:40px;display:flex;align-items:center;gap:14px}
+.studio-icon{width:28px;height:28px;opacity:.5}
+.studio-text{font-size:9px;letter-spacing:.1em;opacity:.5;line-height:1.5}
+
+/* Bottom Right */
+#bottom-right{position:absolute;bottom:44px;right:40px;text-align:right;line-height:1.2}
+.data-row{margin-bottom:3px}
+
+/* CTA */
+#cta-btn{position:absolute;bottom:44px;left:50%;transform:translateX(-50%);border:1px solid rgba(240,240,240,.3);padding:10px 28px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.15em;color:rgba(240,240,240,.7);background:transparent;cursor:pointer;pointer-events:auto;transition:all .4s ease}
+#cta-btn:hover{border-color:rgba(240,240,240,.7);color:#F0F0F0;background:rgba(240,240,240,.04)}
+
+/* Callout SVG */
+#callout-svg{position:fixed;top:0;left:0;width:100%;height:100%;z-index:5;pointer-events:none}
+.cl-line{stroke:rgba(240,240,240,.15);stroke-width:.5;fill:none}
+.cl-dot{fill:rgba(240,240,240,.5)}
+
+/* Callout labels */
+.cl-label{position:absolute;font-size:9px;letter-spacing:.1em}
+.cl-label .hud-label{display:block;margin-bottom:2px}
+
+/* Loading */
+#loader{position:fixed;top:0;left:0;width:100%;height:100%;z-index:100;background:#000;display:flex;align-items:center;justify-content:center;color:#F0F0F0;font-size:11px;letter-spacing:.2em;opacity:1;transition:opacity 1s ease}
+#loader.hidden{opacity:0;pointer-events:none}
+</style>
+</head>
+<body>
+
+<div id="loader">INITIALIZING LATENT SPACE...</div>
+
+<!-- Callout Lines SVG -->
+<svg id="callout-svg" xmlns="http://www.w3.org/2000/svg">
+  <line id="ln-medium" class="cl-line"/><circle id="dt-medium" class="cl-dot" r="2"/>
+  <line id="ln-res" class="cl-line"/><circle id="dt-res" class="cl-dot" r="2"/>
+  <line id="ln-latent" class="cl-line"/><circle id="dt-latent" class="cl-dot" r="2"/>
+  <line id="ln-density" class="cl-line"/><circle id="dt-density" class="cl-dot" r="2"/>
+</svg>
+
+<!-- HUD -->
+<div id="hud">
+  <div id="top-left">DATA PAINTINGS &amp;<br>SCULPTURES</div>
+  <div id="top-right">
+    <div class="title">UNSUPERVISED</div>
+    <div class="subtitle">DATA UNIVERSE — MoMA</div>
+  </div>
+  <div id="bottom-left">
+    <svg class="studio-icon" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="16" cy="16" r="13" stroke="#F0F0F0" stroke-width=".8" fill="none" opacity=".5"/>
+      <circle cx="16" cy="16" r="4" stroke="#F0F0F0" stroke-width=".5" fill="none" opacity=".4"/>
+      <line x1="16" y1="2" x2="16" y2="30" stroke="#F0F0F0" stroke-width=".3" opacity=".3"/>
+      <line x1="2" y1="16" x2="30" y2="16" stroke="#F0F0F0" stroke-width=".3" opacity=".3"/>
+    </svg>
+    <div class="studio-text">REFIK ANADOL<br>STUDIO</div>
+  </div>
+  <div id="bottom-right">
+    <div class="data-row"><span class="hud-label">PLATFORM </span><span class="hud-value">WebGL 2.0</span></div>
+    <div class="data-row"><span class="hud-label">EDITION </span><span class="hud-value">1/1 Digital</span></div>
+    <div class="data-row"><span class="hud-label">PARTICLES </span><span class="hud-value" id="ui-particles">—</span></div>
+    <div class="data-row"><span class="hud-label">FPS </span><span class="hud-value" id="ui-fps">—</span></div>
+  </div>
+
+  <div class="cl-label" id="lb-medium" style="top:28%;left:48px"><span class="hud-label">MEDIUM</span><span class="hud-value">AI DATA SCULPTURE</span></div>
+  <div class="cl-label" id="lb-res" style="top:22%;right:48px;text-align:right"><span class="hud-label">RESOLUTION</span><span class="hud-value" id="ui-res">—</span></div>
+  <div class="cl-label" id="lb-latent" style="bottom:30%;left:48px"><span class="hud-label">LATENT SPACE</span><span class="hud-value">DIMENSION 512</span></div>
+  <div class="cl-label" id="lb-density" style="bottom:24%;right:48px;text-align:right"><span class="hud-label">FIELD DENSITY</span><span class="hud-value" id="ui-density">—</span></div>
+
+  <button id="cta-btn">VIEW ON FERALFILE</button>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ─── Config ───
+const TEX = 512; // 512×512 = 262K particles
+const COUNT = TEX * TEX;
+const CYCLE = 20.0; // 20s breathing cycle
+
+// ─── Renderer ───
+const W = window.innerWidth, H = window.innerHeight;
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.setSize(W, H);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000000);
+document.body.appendChild(renderer.domElement);
+
+// ─── Scene / Camera ───
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, W / H, 0.1, 100);
+camera.position.set(0, 0, 4.8);
+
+// ─── Mouse ───
+const mouse = { x: 0, y: 0, tx: 0, ty: 0 };
+document.addEventListener('mousemove', e => {
+  mouse.tx = (e.clientX / W - 0.5) * 2;
+  mouse.ty = (e.clientY / H - 0.5) * 2;
+});
+
+// ─── GLSL: Simplex Noise + Curl Noise ───
+const NOISE_GLSL = /* glsl */`
+vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x,289.0);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-0.85373472095314*r;}
+float snoise(vec3 v){
+  const vec2 C=vec2(1./6.,1./3.);
+  const vec4 D=vec4(0.,.5,1.,2.);
+  vec3 i=floor(v+dot(v,C.yyy));
+  vec3 x0=v-i+dot(i,C.xxx);
+  vec3 g=step(x0.yzx,x0.xyz);
+  vec3 l=1.0-g;
+  vec3 i1=min(g.xyz,l.zxy);
+  vec3 i2=max(g.xyz,l.zxy);
+  vec3 x1=x0-i1+C.xxx;
+  vec3 x2=x0-i2+C.yyy;
+  vec3 x3=x0-D.yyy;
+  i=mod(i,289.0);
+  vec4 p=permute(permute(permute(i.z+vec4(0.,i1.z,i2.z,1.))+i.y+vec4(0.,i1.y,i2.y,1.))+i.x+vec4(0.,i1.x,i2.x,1.));
+  float n_=1./7.;
+  vec3 ns=n_*D.wyz-D.xzx;
+  vec4 j=p-49.0*floor(p*ns.z*ns.z);
+  vec4 x_=floor(j*ns.z);
+  vec4 y_=floor(j-7.0*x_);
+  vec4 x=x_*ns.x+ns.yyyy;
+  vec4 y=y_*ns.x+ns.yyyy;
+  vec4 h=1.0-abs(x)-abs(y);
+  vec4 b0=vec4(x.xy,y.xy);
+  vec4 b1=vec4(x.zw,y.zw);
+  vec4 s0=floor(b0)*2.0+1.0;
+  vec4 s1=floor(b1)*2.0+1.0;
+  vec4 sh=-step(h,vec4(0.));
+  vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;
+  vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+  vec3 p0=vec3(a0.xy,h.x);
+  vec3 p1=vec3(a0.zw,h.y);
+  vec3 p2=vec3(a1.xy,h.z);
+  vec3 p3=vec3(a1.zw,h.w);
+  vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+  p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
+  vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0);
+  m=m*m;
+  return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+}
+vec3 curlNoise(vec3 p){
+  float e=0.01;
+  vec3 s2=vec3(31.416,47.853,12.793);
+  vec3 s3=vec3(113.758,23.479,67.214);
+  float a=snoise(p+s3+vec3(0,e,0))-snoise(p+s3-vec3(0,e,0));
+  float b=snoise(p+s2+vec3(0,0,e))-snoise(p+s2-vec3(0,0,e));
+  float c=snoise(p+vec3(0,0,e))-snoise(p-vec3(0,0,e));
+  float d=snoise(p+s3+vec3(e,0,0))-snoise(p+s3-vec3(e,0,0));
+  float f=snoise(p+s2+vec3(e,0,0))-snoise(p+s2-vec3(e,0,0));
+  float g=snoise(p+vec3(0,e,0))-snoise(p-vec3(0,e,0));
+  return vec3(a-b,c-d,f-g)/(2.0*e);
+}
+`;
+
+// ─── GPGPU Velocity Shader ───
+const velShader = /* glsl */`
+${NOISE_GLSL}
+uniform float uTime;
+uniform float uBreath;
+void main(){
+  vec2 uv=gl_FragCoord.xy/resolution.xy;
+  vec4 p4=texture2D(texturePosition,uv);
+  vec4 v4=texture2D(textureVelocity,uv);
+  vec3 p=p4.xyz, v=v4.xyz;
+
+  // Curl noise field
+  float ns=1.2+0.4*uBreath;
+  vec3 curl=curlNoise(p*ns+uTime*0.12);
+  float str=0.8+0.5*uBreath;
+
+  // Attraction to center
+  float dist=length(p);
+  float attr=0.25+0.6*(1.0-uBreath);
+  vec3 toC=-normalize(p+1e-4)*attr*dist*0.08;
+
+  // Turbulence layer (higher freq)
+  vec3 turb=curlNoise(p*3.0+uTime*0.3)*0.15;
+
+  v+=(curl*str*0.08+toC*0.12+turb);
+  v*=0.95;
+
+  float spd=length(v);
+  if(spd>1.5)v=v/spd*1.5;
+
+  gl_FragColor=vec4(v,v4.w);
+}`;
+
+// ─── GPGPU Position Shader ───
+const posShader = /* glsl */`
+uniform float uBreath;
+void main(){
+  vec2 uv=gl_FragCoord.xy/resolution.xy;
+  vec4 p4=texture2D(texturePosition,uv);
+  vec4 v4=texture2D(textureVelocity,uv);
+  vec3 p=p4.xyz+v4.xyz*0.006;
+
+  float mx=2.2+0.8*uBreath;
+  float d=length(p);
+  if(d>mx)p*=mx/d;
+
+  gl_FragColor=vec4(p,p4.w);
+}`;
+
+// ─── Particle Vertex Shader ───
+const ptVert = /* glsl */`
+uniform sampler2D tPos;
+uniform sampler2D tVel;
+uniform float uSize;
+varying vec3 vCol;
+varying float vA;
+void main(){
+  vec4 pd=texture2D(tPos,uv);
+  vec4 vd=texture2D(tVel,uv);
+  vec3 pos=pd.xyz;
+  float spd=length(vd.xyz);
+  float dist=length(pos);
+
+  // Color: magenta → cyan → emerald, core → white
+  float t=clamp(spd*2.5,0.,1.);
+  vec3 mag=vec3(.85,.08,.65);
+  vec3 cyn=vec3(.08,.78,.88);
+  vec3 emr=vec3(.1,.88,.45);
+  vec3 col=mix(mag,cyn,t);
+  col=mix(col,emr,sin(pd.w*6.283+spd*4.)*0.5+0.5);
+  float core=1.0-smoothstep(0.0,1.2,dist);
+  col=mix(col,vec3(1.),core*0.85);
+
+  vCol=col;
+  vA=(.25+.75*(1.-smoothstep(0.,2.8,dist)))*(0.4+spd*0.6);
+
+  vec4 mv=modelViewMatrix*vec4(pos,1.);
+  gl_PointSize=uSize*(1.+spd*.4)*(280./-mv.z);
+  gl_Position=projectionMatrix*mv;
+}`;
+
+// ─── Particle Fragment Shader ───
+const ptFrag = /* glsl */`
+varying vec3 vCol;
+varying float vA;
+void main(){
+  float d=length(gl_PointCoord-.5)*2.;
+  float a=1.-smoothstep(0.,.95,d);
+  a*=vA*.3;
+  gl_FragColor=vec4(vCol,a);
+}`;
+
+// ─── GPGPU Init ───
+const gpu = new GPUComputationRenderer(TEX, TEX, renderer);
+const pTex = gpu.createTexture();
+const vTex = gpu.createTexture();
+const pd = pTex.image.data, vd = vTex.image.data;
+for (let i = 0; i < COUNT; i++) {
+  const j = i * 4;
+  const th = Math.random() * Math.PI * 2;
+  const ph = Math.acos(2 * Math.random() - 1);
+  const r = Math.pow(Math.random(), 0.33) * 1.8;
+  pd[j] = r * Math.sin(ph) * Math.cos(th);
+  pd[j+1] = r * Math.sin(ph) * Math.sin(th);
+  pd[j+2] = r * Math.cos(ph);
+  pd[j+3] = Math.random();
+  vd[j] = (Math.random() - .5) * .05;
+  vd[j+1] = (Math.random() - .5) * .05;
+  vd[j+2] = (Math.random() - .5) * .05;
+  vd[j+3] = 0;
+}
+
+const posV = gpu.addVariable('texturePosition', posShader, pTex);
+const velV = gpu.addVariable('textureVelocity', velShader, vTex);
+gpu.setVariableDependencies(posV, [posV, velV]);
+gpu.setVariableDependencies(velV, [posV, velV]);
+const pu = posV.material.uniforms, vu = velV.material.uniforms;
+pu.uBreath = { value: 0 };
+vu.uTime = { value: 0 };
+vu.uBreath = { value: 0 };
+
+const err = gpu.init();
+if (err) { console.error('GPGPU:', err); document.getElementById('loader').textContent = 'WebGL2 required. ' + err; }
+
+// ─── Particle Points ───
+const geo = new THREE.BufferGeometry();
+const uvs = new Float32Array(COUNT * 2);
+const pos0 = new Float32Array(COUNT * 3);
+for (let i = 0; i < COUNT; i++) {
+  uvs[i*2] = (i % TEX + .5) / TEX;
+  uvs[i*2+1] = (Math.floor(i / TEX) + .5) / TEX;
+}
+geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+geo.setAttribute('position', new THREE.BufferAttribute(pos0, 3));
+
+const mat = new THREE.ShaderMaterial({
+  uniforms: { tPos: { value: null }, tVel: { value: null }, uSize: { value: 1.2 } },
+  vertexShader: ptVert, fragmentShader: ptFrag,
+  blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
+});
+const pts = new THREE.Points(geo, mat);
+pts.frustumCulled = false;
+scene.add(pts);
+
+// ─── Spherical Wireframe Grid ───
+const gridMat = new THREE.ShaderMaterial({
+  vertexShader: `
+    varying float vFade;
+    void main(){
+      vec4 mv=modelViewMatrix*vec4(position,1.);
+      vec4 cp=projectionMatrix*mv;
+      vec2 ndc=cp.xy/cp.w;
+      float edge=max(abs(ndc.x),abs(ndc.y));
+      vFade=1.-smoothstep(.4,.95,edge);
+      gl_Position=cp;
+    }`,
+  fragmentShader: `
+    varying float vFade;
+    void main(){
+      gl_FragColor=vec4(.35,.4,.45,vFade*.08);
+    }`,
+  transparent: true, depthWrite: false, wireframe: true, side: THREE.DoubleSide
+});
+const gridSphere = new THREE.Mesh(new THREE.SphereGeometry(7, 48, 32), gridMat);
+scene.add(gridSphere);
+
+// ─── Post Processing: Bloom ───
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 1.8, 0.6, 0.05));
+composer.addPass(new OutputPass());
+
+// ─── HUD Updates ───
+document.getElementById('ui-particles').textContent = (COUNT / 1e3 | 0) + 'K';
+document.getElementById('ui-res').textContent = W + '×' + H;
+
+// Callout anchor 3D points
+const anchors = {
+  medium:  new THREE.Vector3(-.7, .5, .2),
+  res:     new THREE.Vector3(.7, .4, -.1),
+  latent:  new THREE.Vector3(-.5, -.4, .3),
+  density: new THREE.Vector3(.5, -.5, .1),
+};
+
+function proj(v) {
+  const p = v.clone().project(camera);
+  return { x: (p.x+1)/2*window.innerWidth, y: (-p.y+1)/2*window.innerHeight };
+}
+
+function updateLines() {
+  for (const [k, a3] of Object.entries(anchors)) {
+    const lb = document.getElementById('lb-' + k);
+    if (!lb) continue;
+    const r = lb.getBoundingClientRect();
+    const isLeft = k === 'medium' || k === 'latent';
+    const lx = isLeft ? r.right + 4 : r.left - 4;
+    const ly = r.top + r.height / 2;
+    const s = proj(a3);
+    const ln = document.getElementById('ln-' + k);
+    const dt = document.getElementById('dt-' + k);
+    if (ln) { ln.setAttribute('x1', lx); ln.setAttribute('y1', ly); ln.setAttribute('x2', s.x); ln.setAttribute('y2', s.y); }
+    if (dt) { dt.setAttribute('cx', s.x); dt.setAttribute('cy', s.y); }
+  }
+}
+
+// ─── Resize ───
+window.addEventListener('resize', () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  document.getElementById('ui-res').textContent = w + '×' + h;
+});
+
+// ─── FPS ───
+let fc = 0, lt = performance.now();
+
+// ─── Animate ───
+const clock = new THREE.Clock();
+let started = false;
+
+function tick() {
+  requestAnimationFrame(tick);
+  const t = clock.getElapsedTime();
+
+  // Hide loader after first frame
+  if (!started) { started = true; setTimeout(() => document.getElementById('loader').classList.add('hidden'), 300); }
+
+  // 20s breathing with non-linear easing
+  const cp = (t % CYCLE) / CYCLE;
+  const raw = Math.sin(cp * Math.PI * 2) * .5 + .5;
+  const breath = raw < .5 ? 4*raw*raw*raw : 1 - Math.pow(-2*raw+2, 3)/2;
+
+  // GPGPU
+  vu.uTime.value = t;
+  vu.uBreath.value = breath;
+  pu.uBreath.value = breath;
+  gpu.compute();
+  mat.uniforms.tPos.value = gpu.getCurrentRenderTarget(posV).texture;
+  mat.uniforms.tVel.value = gpu.getCurrentRenderTarget(velV).texture;
+
+  // Mouse parallax (smooth lerp)
+  mouse.x += (mouse.tx - mouse.x) * .04;
+  mouse.y += (mouse.ty - mouse.y) * .04;
+  camera.position.x = -mouse.x * .35;
+  camera.position.y = -mouse.y * .25;
+  camera.lookAt(0, 0, 0);
+
+  // Gentle rotation of grid
+  gridSphere.rotation.y = t * .02;
+  gridSphere.rotation.x = Math.sin(t * .01) * .1;
+
+  // Gently orbit anchors
+  const sa = Math.sin(t * .08) * .15;
+  const ca = Math.cos(t * .08) * .15;
+  anchors.medium.x = -.7 + sa;
+  anchors.res.x = .7 - sa;
+  anchors.latent.y = -.4 + ca;
+  anchors.density.y = -.5 - ca;
+
+  composer.render();
+  updateLines();
+
+  // FPS
+  fc++;
+  const now = performance.now();
+  if (now - lt >= 1000) {
+    document.getElementById('ui-fps').textContent = fc;
+    document.getElementById('ui-density').textContent = (COUNT * fc / 1e6).toFixed(1) + 'M/s';
+    fc = 0; lt = now;
+  }
+}
+tick();
+</script>
+</body>
+</html>
