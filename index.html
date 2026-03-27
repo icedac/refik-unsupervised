@@ -196,15 +196,13 @@ document.addEventListener('mousemove', e => {
 });
 document.getElementById('ui-res').textContent = window.innerWidth + '×' + window.innerHeight;
 
-// Explicitly block zoom/drag: prevent wheel zoom, pinch zoom, and drag
-document.addEventListener('wheel', e => e.preventDefault(), { passive: false });
 // Block ALL zoom/drag/scroll interactions — PRD §5
 document.addEventListener('wheel', e => e.preventDefault(), { passive: false });
-document.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
 document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
 document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
-// Pointer drag suppression — prevent any drag interaction on the canvas
-document.addEventListener('pointerdown', e => { if (e.target.tagName === 'CANVAS') e.preventDefault(); });
+// Blanket pointer drag suppression — all elements except CTA
+document.addEventListener('pointerdown', e => { if (e.target.id !== 'cta-btn') e.preventDefault(); });
 document.addEventListener('dragstart', e => e.preventDefault());
 
 // ═══════════════════════════════════════════════════════════════
@@ -336,6 +334,7 @@ uniform sampler2D tVel;
 uniform float uSize;
 uniform float uBreath;
 uniform vec2 uResolution;
+uniform float uTexSize; // GPGPU texture dimension for neighbor sampling
 varying vec3 vCol;
 varying float vA;
 varying vec2 vVelScreen; // velocity direction in screen space for oriented stretch
@@ -384,12 +383,26 @@ void main(){
   float slowFar=smoothstep(0.0,0.15,spd)*smoothstep(3.0,1.5,dist);
   col=mix(deepPurple,col,slowFar);
 
-  // WHITE BLOWN-OUT CORE — density-driven, not just radius
-  // Density proxy: center particles that are also slow (packed tight) are densest
-  float densityProxy = (1.0-smoothstep(0.0,0.8,dist)) * (1.0-smoothstep(0.0,0.3,spd));
-  // Also add pure radius component but weighted less
+  // WHITE BLOWN-OUT CORE — real local density estimation via GPGPU neighbor sampling
+  // Sample 8 neighboring particle positions from the GPGPU texture and compute
+  // how many are within a proximity threshold. This is a true density signal.
+  float nbrRadius = 0.4;
+  float densityAccum = 0.0;
+  float texel = 1.0 / uTexSize;
+  for (int dx = -1; dx <= 1; dx++) {
+    for (int dy = -1; dy <= 1; dy++) {
+      if (dx == 0 && dy == 0) continue; // skip self
+      vec2 nUV = uv + vec2(float(dx), float(dy)) * texel;
+      nUV = clamp(nUV, 0.0, 1.0);
+      vec3 nbrPos = texture2D(tPos, nUV).xyz;
+      float nbrDist = length(nbrPos - pos);
+      densityAccum += 1.0 - smoothstep(0.0, nbrRadius, nbrDist);
+    }
+  }
+  densityAccum /= 8.0; // normalize: 0 = isolated, 1 = all 8 neighbors within radius
+  // Combine local density with center proximity for robust core detection
   float radiusCore = 1.0-smoothstep(0.0,0.5,dist);
-  float coreFactor = max(pow(densityProxy,1.5)*1.2, pow(radiusCore,3.0)*0.6);
+  float coreFactor = max(pow(densityAccum,1.2)*1.3, pow(radiusCore,3.0)*0.5);
   coreFactor = clamp(coreFactor,0.0,1.0);
   col=mix(col,vec3(1.0),coreFactor*0.95);
   col*=1.0+spd*0.6;
