@@ -501,7 +501,7 @@ geo.setAttribute('position', new THREE.BufferAttribute(pos0, 3));
 geo.setDrawRange(0, EXACT_COUNT);
 
 const mat = new THREE.ShaderMaterial({
-  uniforms: { tPos: {value:null}, tVel: {value:null}, uSize: {value:1.0}, uBreath: {value:0}, uResolution: {value: new THREE.Vector2(window.innerWidth, window.innerHeight)} },
+  uniforms: { tPos:{value:null}, tVel:{value:null}, uSize:{value:1.0}, uBreath:{value:0}, uResolution:{value:new THREE.Vector2(window.innerWidth,window.innerHeight)}, uTexSize:{value:parseFloat(TEX)} },
   vertexShader: ptVert, fragmentShader: ptFrag,
   blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
 });
