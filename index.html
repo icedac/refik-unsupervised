@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>UNSUPERVISED — Refik Anadol</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700&family=Roboto+Mono:wght@300;400&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Space Mono',monospace;cursor:crosshair}
@@ -14,8 +14,8 @@ canvas{display:block;position:fixed;top:0;left:0;width:100%;height:100%;z-index:
 /* HUD */
 #hud{position:fixed;top:0;left:0;width:100%;height:100%;z-index:10;pointer-events:none;color:#F0F0F0;font-size:11px;letter-spacing:.05em}
 #hud *{pointer-events:none}
-.hud-label{opacity:.6;font-weight:400;font-size:10px;text-transform:uppercase;letter-spacing:.12em}
-.hud-value{opacity:.95;font-weight:400;font-size:11px}
+.hud-label{opacity:.7;font-family:'Roboto Mono',monospace;font-weight:300;font-size:10px;text-transform:uppercase;letter-spacing:.12em}
+.hud-value{opacity:1;font-family:'Roboto Mono',monospace;font-weight:400;font-size:11px}
 
 /* Top Left vertical */
 #top-left{position:absolute;top:48px;left:40px;writing-mode:vertical-rl;text-orientation:mixed;font-size:10px;letter-spacing:.18em;opacity:.4;line-height:1.4}
@@ -58,6 +58,7 @@ canvas{display:block;position:fixed;top:0;left:0;width:100%;height:100%;z-index:
 <body>
 
 <div id="loader">INITIALIZING LATENT SPACE...</div>
+<video id="fallback-video" muted loop playsinline></video>
 
 <!-- SVG Callout overlay -->
 <svg id="callout-svg" xmlns="http://www.w3.org/2000/svg">
@@ -146,14 +147,26 @@ document.getElementById('ui-particles').textContent = COUNT >= 1e6
   ? (COUNT / 1e6).toFixed(1) + 'M'
   : (COUNT / 1e3 | 0) + 'K';
 
-// Fallback for non-WebGL devices: show static gradient + message
+// Fallback for non-WebGL devices: show video loop or static gradient
 if (tier === 'fallback') {
-  document.getElementById('loader').innerHTML =
-    '<div style="text-align:center"><div style="font-size:22px;letter-spacing:.2em;margin-bottom:16px">UNSUPERVISED</div>' +
-    '<div style="opacity:.5;font-size:10px">WebGL 2.0 required for real-time rendering.<br>Please use a modern desktop browser.</div></div>';
-  document.getElementById('loader').style.background =
-    'radial-gradient(ellipse at center, #1a0a2e 0%, #000 70%)';
-  throw new Error('No WebGL — fallback shown');
+  const vid = document.getElementById('fallback-video');
+  // Try video fallback first
+  vid.src = 'https://cdn.feralfile.com/unsupervised-loop.mp4';
+  vid.muted = true;
+  vid.loop = true;
+  vid.playsInline = true;
+  vid.style.display = 'block';
+  vid.play().catch(() => {
+    // If video fails too, show gradient + message
+    vid.style.display = 'none';
+    document.getElementById('loader').innerHTML =
+      '<div style="text-align:center"><div style="font-size:22px;letter-spacing:.2em;margin-bottom:16px">UNSUPERVISED</div>' +
+      '<div style="opacity:.5;font-size:10px">WebGL 2.0 required for real-time rendering.<br>Please use a modern desktop browser.</div></div>';
+    document.getElementById('loader').style.background =
+      'radial-gradient(ellipse at center, #1a0a2e 0%, #000 70%)';
+  });
+  document.getElementById('loader').classList.add('hidden');
+  throw new Error('No WebGL — video fallback shown');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -346,9 +359,13 @@ void main(){
   float slowFar=smoothstep(0.0,0.15,spd)*smoothstep(3.0,1.5,dist);
   col=mix(deepPurple,col,slowFar);
 
-  // WHITE BLOWN-OUT CORE
-  float coreFactor=1.0-smoothstep(0.0,0.6,dist);
-  coreFactor=pow(coreFactor,2.0);
+  // WHITE BLOWN-OUT CORE — density-driven, not just radius
+  // Density proxy: center particles that are also slow (packed tight) are densest
+  float densityProxy = (1.0-smoothstep(0.0,0.8,dist)) * (1.0-smoothstep(0.0,0.3,spd));
+  // Also add pure radius component but weighted less
+  float radiusCore = 1.0-smoothstep(0.0,0.5,dist);
+  float coreFactor = max(pow(densityProxy,1.5)*1.2, pow(radiusCore,3.0)*0.6);
+  coreFactor = clamp(coreFactor,0.0,1.0);
   col=mix(col,vec3(1.0),coreFactor*0.95);
   col*=1.0+spd*0.6;
 
@@ -424,7 +441,21 @@ vu.uBreath = { value: 0 };
 const gpuErr = gpu.init();
 if (gpuErr) {
   console.error('GPGPU:', gpuErr);
-  document.getElementById('loader').textContent = 'WebGL2 GPGPU init failed: ' + gpuErr;
+  // GPGPU failure → try video fallback same as no-WebGL path
+  const vid = document.getElementById('fallback-video');
+  vid.src = 'https://cdn.feralfile.com/unsupervised-loop.mp4';
+  vid.muted = true; vid.loop = true; vid.playsInline = true;
+  vid.style.display = 'block';
+  vid.play().catch(() => {
+    vid.style.display = 'none';
+    document.getElementById('loader').innerHTML =
+      '<div style="text-align:center"><div style="font-size:22px;letter-spacing:.2em;margin-bottom:16px">UNSUPERVISED</div>' +
+      '<div style="opacity:.5;font-size:10px">GPGPU init failed. Please use a modern GPU.</div></div>';
+    document.getElementById('loader').style.background =
+      'radial-gradient(ellipse at center, #1a0a2e 0%, #000 70%)';
+  });
+  document.getElementById('loader').classList.add('hidden');
+  throw new Error('GPGPU failed — video fallback: ' + gpuErr);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -452,44 +483,80 @@ scene.add(pts);
 // ═══════════════════════════════════════════════════════════════
 // BACKGROUND: Lat/Lon Spherical Grid (dotted lines)
 // ═══════════════════════════════════════════════════════════════
-// Custom ShaderMaterial for grid lines with built-in radial fade
-const gridLineMat = new THREE.ShaderMaterial({
-  uniforms: {
-    uColor: { value: new THREE.Color(0x556070) },
-    uCameraPos: { value: camera.position }
-  },
-  vertexShader: `
-    varying float vFade;
-    varying float vDist;
-    uniform vec3 uCameraPos;
-    void main(){
-      vec4 worldPos=modelMatrix*vec4(position,1.0);
-      vec4 mvp=projectionMatrix*modelViewMatrix*vec4(position,1.0);
-      // Screen-space edge fade (radial from center)
-      vec2 ndc=mvp.xy/mvp.w;
-      float edgeDist=length(ndc);
-      vFade=1.0-smoothstep(0.3,1.1,edgeDist);
-      // Distance-based fade (farther from camera = dimmer)
-      vDist=length(worldPos.xyz-uCameraPos);
-      gl_Position=mvp;
-    }
-  `,
-  fragmentShader: `
-    varying float vFade;
-    varying float vDist;
-    uniform vec3 uColor;
-    void main(){
-      float distFade=1.0-smoothstep(4.0,12.0,vDist);
-      float alpha=vFade*distFade*0.1;
-      if(alpha<0.003) discard;
-      gl_FragColor=vec4(uColor,alpha);
-    }
-  `,
-  transparent: true, depthWrite: false, side: THREE.DoubleSide
-});
+// Dashed grid using LineSegments for deliberate dash pattern + shader-based radial fade
+const gridDashVertShader = /* glsl */`
+varying float vScreenDist;
+varying vec3 vWorldPos;
+void main() {
+  vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+  // Screen-space distance from center for radial fade
+  vec2 ndc = gl_Position.xy / gl_Position.w;
+  vScreenDist = length(ndc);
+}
+`;
+const gridDashFragShader = /* glsl */`
+uniform float uOpacity;
+uniform vec3 uColor;
+varying float vScreenDist;
+varying vec3 vWorldPos;
+void main() {
+  // Radial screen-space fade: dissolve into void at edges
+  float edgeFade = 1.0 - smoothstep(0.3, 1.2, vScreenDist);
+  float a = uOpacity * edgeFade;
+  if (a < 0.005) discard;
+  gl_FragColor = vec4(uColor, a);
+}
+`;
 
 function createLatLonGrid(radius, latCount, lonCount) {
   const group = new THREE.Group();
+  const dashLen = 0.18;
+  const gapLen = 0.14;
+  const color = new THREE.Color(0x556070);
+
+  function makeDashedSegments(points) {
+    // Create dash segments from a continuous polyline
+    const segs = [];
+    let accum = 0;
+    let inDash = true;
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i], b = points[i + 1];
+      const segLen = a.distanceTo(b);
+      let localStart = 0;
+      while (localStart < segLen) {
+        const threshold = inDash ? dashLen : gapLen;
+        const remaining = threshold - accum;
+        const available = segLen - localStart;
+        const consume = Math.min(remaining, available);
+        if (inDash) {
+          const t0 = localStart / segLen;
+          const t1 = (localStart + consume) / segLen;
+          segs.push(
+            a.clone().lerp(b, t0),
+            a.clone().lerp(b, t1)
+          );
+        }
+        localStart += consume;
+        accum += consume;
+        if (accum >= threshold - 0.0001) { accum = 0; inDash = !inDash; }
+      }
+    }
+    return segs;
+  }
+
+  const gridMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uOpacity: { value: 0.1 },
+      uColor: { value: color }
+    },
+    vertexShader: gridDashVertShader,
+    fragmentShader: gridDashFragShader,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.NormalBlending
+  });
 
   // Latitude circles
   for (let i = 1; i < latCount; i++) {
@@ -497,12 +564,14 @@ function createLatLonGrid(radius, latCount, lonCount) {
     const r = radius * Math.sin(phi);
     const y = radius * Math.cos(phi);
     const pts = [];
-    for (let j = 0; j <= 96; j++) { // higher subdivision
-      const theta = (j / 96) * Math.PI * 2;
+    for (let j = 0; j <= 128; j++) {
+      const theta = (j / 128) * Math.PI * 2;
       pts.push(new THREE.Vector3(r * Math.cos(theta), y, r * Math.sin(theta)));
     }
-    const g = new THREE.BufferGeometry().setFromPoints(pts);
-    const line = new THREE.LineSegments(g, gridLineMat.clone());
+    const dashPts = makeDashedSegments(pts);
+    if (dashPts.length < 2) continue;
+    const g = new THREE.BufferGeometry().setFromPoints(dashPts);
+    const line = new THREE.LineSegments(g, gridMat.clone());
     group.add(line);
   }
 
@@ -510,16 +579,18 @@ function createLatLonGrid(radius, latCount, lonCount) {
   for (let j = 0; j < lonCount; j++) {
     const theta = (j / lonCount) * Math.PI * 2;
     const pts = [];
-    for (let i = 0; i <= 64; i++) { // higher subdivision
-      const phi = (i / 64) * Math.PI;
+    for (let i = 0; i <= 80; i++) {
+      const phi = (i / 80) * Math.PI;
       pts.push(new THREE.Vector3(
         radius * Math.sin(phi) * Math.cos(theta),
         radius * Math.cos(phi),
         radius * Math.sin(phi) * Math.sin(theta)
       ));
     }
-    const g = new THREE.BufferGeometry().setFromPoints(pts);
-    const line = new THREE.LineSegments(g, gridLineMat.clone());
+    const dashPts = makeDashedSegments(pts);
+    if (dashPts.length < 2) continue;
+    const g = new THREE.BufferGeometry().setFromPoints(dashPts);
+    const line = new THREE.LineSegments(g, gridMat.clone());
     group.add(line);
   }
 
@@ -544,7 +615,7 @@ const bloomPass = new UnrealBloomPass(
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 
-// Radial fade is now built into grid shader (per-vertex alpha based on screen position)
+// Radial fade is built into grid dash fragment shader (screen-space NDC distance)
 
 // ═══════════════════════════════════════════════════════════════
 // CALLOUT ANCHOR SYSTEM — Raycasting to sculpture surface
@@ -671,10 +742,10 @@ function tick() {
   // Grid slow rotation
   gridGroup.rotation.y = t * 0.015;
   gridGroup.rotation.x = Math.sin(t * 0.008) * 0.08;
-  // Update grid shader camera position for correct fade
+  // Grid opacity pulsation with breathing
   gridGroup.traverse(child => {
-    if (child.material && child.material.uniforms && child.material.uniforms.uCameraPos) {
-      child.material.uniforms.uCameraPos.value.copy(camera.position);
+    if (child.material && child.material.uniforms && child.material.uniforms.uOpacity) {
+      child.material.uniforms.uOpacity.value = 0.07 + 0.06 * breath;
     }
   });
 
