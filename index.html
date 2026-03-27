@@ -76,15 +76,13 @@ canvas{display:block;position:fixed;top:0;left:0;width:100%;height:100%;z-index:
     <div class="subtitle">DATA UNIVERSE — MoMA</div>
   </div>
   <div id="bottom-left">
-    <!-- Refik Anadol Studio logomark approximation -->
+    <!-- Refik Anadol Studio logomark — stylized RA monogram -->
     <svg class="studio-icon" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="20" cy="20" r="18" stroke="#F0F0F0" stroke-width=".6" fill="none" opacity=".45"/>
-      <circle cx="20" cy="20" r="9" stroke="#F0F0F0" stroke-width=".4" fill="none" opacity=".3"/>
-      <circle cx="20" cy="20" r="2" fill="#F0F0F0" opacity=".4"/>
-      <path d="M20 2 L20 38" stroke="#F0F0F0" stroke-width=".3" opacity=".25"/>
-      <path d="M2 20 L38 20" stroke="#F0F0F0" stroke-width=".3" opacity=".25"/>
-      <path d="M7.3 7.3 L32.7 32.7" stroke="#F0F0F0" stroke-width=".2" opacity=".15"/>
-      <path d="M32.7 7.3 L7.3 32.7" stroke="#F0F0F0" stroke-width=".2" opacity=".15"/>
+      <circle cx="20" cy="20" r="18" stroke="#F0F0F0" stroke-width=".7" fill="none" opacity=".5"/>
+      <!-- Stylized 'R' left half -->
+      <path d="M14 30 L14 11 L21 11 Q26 11 26 16 Q26 20 21 20 L14 20 M17 20 L24 30" stroke="#F0F0F0" stroke-width=".5" fill="none" opacity=".45"/>
+      <!-- Stylized 'A' right half, interleaved -->
+      <path d="M20 11 L26 30 M23 23 L28 23" stroke="#F0F0F0" stroke-width=".4" fill="none" opacity=".35"/>
     </svg>
     <div class="studio-text">REFIK ANADOL<br>STUDIO</div>
   </div>
@@ -138,7 +136,8 @@ function detectTier() {
 
 const tier = detectTier();
 // PRD spec: High 2M, Mid 1M, Low 500K → sqrt(2M)≈1414, sqrt(1M)=1024, sqrt(500K)≈724
-// Low-end devices get video-loop fallback per PRD.md:9
+// All three tiers render live. Only no-WebGL/GPGPU-fail → video fallback.
+// Runtime FPS monitor steps down: high → mid → low → video (PRD.md:9)
 const TEX_SIZES = { high: 1414, mid: 1024, low: 724, fallback: 0 };
 const TEX = TEX_SIZES[tier] || 724;
 const COUNT = TEX * TEX;
@@ -166,16 +165,13 @@ function activateVideoFallback(reason) {
   document.getElementById('loader').classList.add('hidden');
 }
 
-// For no-WebGL devices: video fallback
+// For no-WebGL devices only: video fallback
 if (tier === 'fallback') {
   activateVideoFallback('WebGL 2.0 required for real-time rendering.<br>Please use a modern desktop browser.');
   throw new Error('No WebGL — video fallback shown');
 }
-// PRD §2: low-end devices use video-loop fallback instead of rendering 500K particles
-if (tier === 'low') {
-  activateVideoFallback('Low-end GPU detected.<br>Showing pre-rendered visualization.');
-  throw new Error('Low tier — video fallback shown');
-}
+// Low tier (500K) renders live — only truly incapable devices get video fallback.
+// Runtime FPS monitor will step down high→mid→low→video if performance degrades.
 
 // ═══════════════════════════════════════════════════════════════
 // RENDERER
@@ -690,12 +686,48 @@ window.addEventListener('resize', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// FPS + RUNTIME TIER DOWNGRADE
+// FPS + RUNTIME 3-STAGE TIER DOWNGRADE (high → mid → low → video)
 // ═══════════════════════════════════════════════════════════════
 let fc = 0, lt = performance.now();
 let lowFpsCount = 0;
-const FPS_THRESHOLD = 20; // If FPS stays below 20 for 5 consecutive seconds, show fallback
-const LOW_FPS_LIMIT = 5;
+const FPS_THRESHOLD = 24; // If sustained below this, step down one tier
+const LOW_FPS_SUSTAIN = 4; // seconds of sustained low FPS before stepping down
+
+// Live particle budget — can be reduced at runtime without reinitializing GPGPU.
+// We limit the draw range of the Points mesh. GPGPU still runs full texture,
+// but only the first N particles are rendered (cheap LOD).
+const TIER_COUNTS = { high: 1414*1414, mid: 1024*1024, low: 724*724 };
+const TIER_ORDER = ['high', 'mid', 'low', 'video'];
+let currentLiveTier = tier; // starts at detected tier
+let liveParticleCount = COUNT; // actual rendered particles
+
+function stepDownTier() {
+  const idx = TIER_ORDER.indexOf(currentLiveTier);
+  if (idx < 0 || idx >= TIER_ORDER.length - 1) {
+    // Already at video or unknown — activate video fallback
+    activateVideoFallback('Performance too low.<br>Showing pre-rendered visualization.');
+    return false; // signal to stop render loop
+  }
+  const nextTier = TIER_ORDER[idx + 1];
+  if (nextTier === 'video') {
+    activateVideoFallback('Performance too low.<br>Showing pre-rendered visualization.');
+    return false;
+  }
+  // Step down to next live tier
+  currentLiveTier = nextTier;
+  liveParticleCount = TIER_COUNTS[nextTier];
+  // Clamp draw range — only render first N particles
+  geo.setDrawRange(0, liveParticleCount);
+  // Update HUD
+  document.getElementById('ui-tier').textContent = nextTier.toUpperCase() + ' (↓)';
+  document.getElementById('ui-particles').textContent = liveParticleCount >= 1e6
+    ? (liveParticleCount / 1e6).toFixed(1) + 'M'
+    : (liveParticleCount / 1e3 | 0) + 'K';
+  console.warn('Runtime tier downgrade: ' + TIER_ORDER[idx] + ' → ' + nextTier +
+    ' (' + liveParticleCount + ' particles)');
+  lowFpsCount = 0; // reset counter for next tier
+  return true; // continue render loop
+}
 
 // ═══════════════════════════════════════════════════════════════
 // ANIMATION LOOP
@@ -751,20 +783,19 @@ function tick() {
   composer.render();
   updateCalloutLines();
 
-  // FPS display + runtime performance-based downgrade
+  // FPS display + runtime 3-stage tier downgrade
   fc++;
   const now = performance.now();
   if (now - lt >= 1000) {
     const fps = fc;
     document.getElementById('ui-fps').textContent = fps;
-    document.getElementById('ui-density').textContent = (COUNT * fps / 1e6).toFixed(1) + 'M/s';
-    // Runtime tier downgrade: if FPS < threshold for sustained period, switch to video
+    document.getElementById('ui-density').textContent = (liveParticleCount * fps / 1e6).toFixed(1) + 'M/s';
+    // Runtime tier downgrade: step high→mid→low→video on sustained low FPS
     if (fps < FPS_THRESHOLD && started) {
       lowFpsCount++;
-      if (lowFpsCount >= LOW_FPS_LIMIT) {
-        console.warn('Sustained low FPS (' + fps + '), switching to video fallback');
-        activateVideoFallback('Performance too low (' + fps + ' FPS).<br>Showing pre-rendered visualization.');
-        return; // stop animation loop
+      if (lowFpsCount >= LOW_FPS_SUSTAIN) {
+        const continueLoop = stepDownTier();
+        if (!continueLoop) return; // stop animation loop (video fallback activated)
       }
     } else {
       lowFpsCount = 0;
